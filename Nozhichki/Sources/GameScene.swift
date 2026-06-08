@@ -397,6 +397,15 @@ class GameScene: SKScene {
         return CGPoint(x: start.x + direction.dx * t, y: start.y + direction.dy * t)
     }
 
+    private func pizzaExitDist(from start: CGPoint, direction: CGVector) -> CGFloat {
+        let sx = start.x - pizzaCenter.x
+        let sy = start.y - pizzaCenter.y
+        let b = sx * direction.dx + sy * direction.dy
+        let c = sx * sx + sy * sy - pizzaRadius * pizzaRadius
+        let discriminant = max(0, b * b - c)
+        return -b + sqrt(discriminant)
+    }
+
     private func addTrailDot(at point: CGPoint, color: SKColor) {
         let trail = SKShapeNode(circleOfRadius: 3)
         trail.position = point
@@ -739,8 +748,9 @@ class GameScene: SKScene {
         let dir = CGVector(dx: cos(angle), dy: sin(angle))
 
         // Landing point: from the current player's position outward.
-        let throwDistance = pizzaRadius * CGFloat(0.3 + stats.range * 0.12) * CGFloat(power)
         let startPos = playerPositions[player]
+        let distToEdge = pizzaExitDist(from: startPos, direction: dir)
+        let throwDistance = distToEdge * CGFloat(0.3 + stats.range * 0.12) * CGFloat(power)
         let landingPt = CGPoint(
             x: startPos.x + dir.dx * throwDistance,
             y: startPos.y + dir.dy * throwDistance)
