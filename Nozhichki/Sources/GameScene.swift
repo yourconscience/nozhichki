@@ -401,27 +401,30 @@ class GameScene: SKScene {
         let dy = landingPoint.y - pizzaCenter.y
         var sectorAngle = atan2(dy, dx)
         if sectorAngle < 0 { sectorAngle += 2 * .pi }
-
         let sa = (2 * .pi) / CGFloat(sectorCount)
         let sector = Int(floor(sectorAngle / sa)) % sectorCount
-        let startAngle = CGFloat(sector) * sa
-        let endAngle = startAngle + sa
 
-        let sectorPath = CGMutablePath()
-        sectorPath.move(to: .zero)
-        sectorPath.addArc(center: .zero, radius: pizzaRadius - 2,
-                          startAngle: startAngle, endAngle: endAngle, clockwise: false)
-        sectorPath.closeSubpath()
+        let maxCut = 2 + Int(stats.cutWidth * 2)
 
-        aimSectorHighlight.path = sectorPath
-        aimSectorHighlight.position = pizzaCenter
-        aimSectorHighlight.fillColor = playerStrokeColors[sectorOwnership[sector]].withAlphaComponent(0.25)
-        aimSectorHighlight.strokeColor = playerStrokeColors[sectorOwnership[sector]].withAlphaComponent(0.55)
+        let chordPath = CGMutablePath()
+        if let endpoints = chordEndpoints(landingPoint: landingPoint, direction: aimDirection) {
+            chordPath.move(to: endpoints.0)
+            chordPath.addLine(to: endpoints.1)
+        }
+        aimSectorHighlight.path = chordPath
+        aimSectorHighlight.position = .zero
+        aimSectorHighlight.fillColor = .clear
+        aimSectorHighlight.strokeColor = playerStrokeColors[gs.currentPlayer].withAlphaComponent(0.45)
         aimSectorHighlight.lineWidth = 2
         aimSectorHighlight.alpha = 1
 
-        let maxCut = 2 + Int(stats.cutWidth * 2)
-        let actualClaimSize = computeActualClaimSize(landingSector: sector, player: gs.currentPlayer, maxCut: maxCut)
+        let actualClaimSize = computeChordClaimSize(
+            landingPoint: landingPoint,
+            direction: aimDirection,
+            landingSector: sector,
+            player: gs.currentPlayer,
+            maxCut: maxCut
+        )
         let hitChance = computeHitChance(precision: stats.precision, actualClaimSize: actualClaimSize)
         let hitPercent = Int(round(hitChance * 100))
         aimHitChanceLabel.text = "HIT: \(hitPercent)%"
@@ -445,57 +448,107 @@ class GameScene: SKScene {
         return nil
     }
 
-    /// Core mechanic: knife lands at a sector, find the shorter arc to
-    /// the player's territory, expand from the border up to maxCut sectors.
-    /// Returns (flipped count, border sector angle for cut line visual).
-    private func performCut(landingSector: Int, player: Int, maxCut: Int, allowOwnedLanding: Bool = false) -> (Int, CGFloat?) {
-        if sectorOwnership[landingSector] == player && !allowOwnedLanding { return (0, nil) }
+    /// Core mechanic: knife lands at a point, then cuts a chord perpendicular
+    /// to the throw direction. The chord expands from the landing sector in
+    /// both sector directions, stops at the thrower's territory, and is capped
+    /// by maxCut sectors in each direction.
+    private func performChordCut(landingPoint: CGPoint, direction: CGVector,
+                                 landingSector: Int, player: Int, maxCut: Int) -> (Int, (CGPoint, CGPoint)?) {
+        let targets = chordCutSectors(
+            landingPoint: landingPoint,
+            direction: direction,
+            landingSector: landingSector,
+            player: player,
+            maxCut: maxCut
+        )
 
-        let cwDist = distanceToOwned(from: landingSector, player: player, direction: 1)
-        let ccwDist = distanceToOwned(from: landingSector, player: player, direction: -1)
-
-        guard let cw = cwDist, let ccw = ccwDist else { return (0, nil) }
-
-        // Shorter path = smaller piece
-        let dirTowardBorder: Int
-        let totalDist: Int
-        if cw <= ccw {
-            dirTowardBorder = 1
-            totalDist = cw
-        } else {
-            dirTowardBorder = -1
-            totalDist = ccw
+        var flipped = 0
+        for idx in targets where sectorOwnership[idx] != player {
+            sectorOwnership[idx] = player
+            flipped += 1
         }
 
-        let actualClaim = min(totalDist, maxCut)
+        return (flipped, chordEndpoints(landingPoint: landingPoint, direction: direction))
+    }
 
-        // Border sector (already owned by player)
-        let borderSector = (landingSector + totalDist * dirTowardBorder + sectorCount) % sectorCount
-        let sa = (2 * .pi) / CGFloat(sectorCount)
-        let borderAngle = sa * CGFloat(borderSector) + sa / 2
+    private func chordCutSectors(landingPoint: CGPoint, direction: CGVector,
+                                 landingSector: Int, player: Int, maxCut: Int) -> [Int] {
+        guard chordContainsSector(landingPoint: landingPoint, direction: direction, sector: landingSector),
+              sectorOwnership[landingSector] != player else {
+            return []
+        }
 
-        // Expand FROM the border TOWARD the landing (keeps territory connected)
-        let expandDir = -dirTowardBorder
-        var flipped = 0
-        for d in 1...actualClaim {
-            let idx = (borderSector + d * expandDir + sectorCount) % sectorCount
-            if sectorOwnership[idx] != player {
-                sectorOwnership[idx] = player
-                flipped += 1
+        var sectors = [landingSector]
+
+        for dir in [-1, 1] {
+            for step in 1...maxCut {
+                let idx = (landingSector + dir * step + sectorCount) % sectorCount
+                if !chordContainsSector(landingPoint: landingPoint, direction: direction, sector: idx) {
+                    break
+                }
+                if sectorOwnership[idx] == player {
+                    break
+                }
+                sectors.append(idx)
             }
         }
 
-        return (flipped, borderAngle)
+        return sectors
     }
 
-    private func computeActualClaimSize(landingSector: Int, player: Int, maxCut: Int) -> Int {
-        if sectorOwnership[landingSector] == player { return 0 }
+    private func computeChordClaimSize(landingPoint: CGPoint, direction: CGVector,
+                                       landingSector: Int, player: Int, maxCut: Int) -> Int {
+        chordCutSectors(
+            landingPoint: landingPoint,
+            direction: direction,
+            landingSector: landingSector,
+            player: player,
+            maxCut: maxCut
+        ).count
+    }
 
-        let cwDist = distanceToOwned(from: landingSector, player: player, direction: 1)
-        let ccwDist = distanceToOwned(from: landingSector, player: player, direction: -1)
+    private func chordContainsSector(landingPoint: CGPoint, direction: CGVector, sector: Int) -> Bool {
+        let dx = landingPoint.x - pizzaCenter.x
+        let dy = landingPoint.y - pizzaCenter.y
+        let projection = dx * direction.dx + dy * direction.dy
+        let ratio = min(1, max(-1, projection / pizzaRadius))
+        let halfAngle = acos(ratio)
+        let sa = (2 * .pi) / CGFloat(sectorCount)
+        let chordAngle = normalizedAngle(atan2(direction.dy, direction.dx))
+        let sectorAngle = sa * (CGFloat(sector) + 0.5)
+        return abs(shortestAngleDelta(from: chordAngle, to: sectorAngle)) <= halfAngle + sa * 0.5
+    }
 
-        guard let cw = cwDist, let ccw = ccwDist else { return 0 }
-        return min(min(cw, ccw), maxCut)
+    private func chordEndpoints(landingPoint: CGPoint, direction: CGVector) -> (CGPoint, CGPoint)? {
+        let dx = landingPoint.x - pizzaCenter.x
+        let dy = landingPoint.y - pizzaCenter.y
+        let projection = dx * direction.dx + dy * direction.dy
+        let clampedProjection = min(pizzaRadius - 1, max(-pizzaRadius + 1, projection))
+        let halfLength = sqrt(max(0, pizzaRadius * pizzaRadius - clampedProjection * clampedProjection))
+        let perp = CGVector(dx: -direction.dy, dy: direction.dx)
+        let base = CGPoint(
+            x: pizzaCenter.x + direction.dx * clampedProjection,
+            y: pizzaCenter.y + direction.dy * clampedProjection
+        )
+
+        return (
+            CGPoint(x: base.x + perp.dx * halfLength, y: base.y + perp.dy * halfLength),
+            CGPoint(x: base.x - perp.dx * halfLength, y: base.y - perp.dy * halfLength)
+        )
+    }
+
+    private func normalizedAngle(_ angle: CGFloat) -> CGFloat {
+        var value = angle
+        while value < 0 { value += 2 * .pi }
+        while value >= 2 * .pi { value -= 2 * .pi }
+        return value
+    }
+
+    private func shortestAngleDelta(from a: CGFloat, to b: CGFloat) -> CGFloat {
+        var delta = b - a
+        while delta > .pi { delta -= 2 * .pi }
+        while delta < -.pi { delta += 2 * .pi }
+        return delta
     }
 
     private func computeHitChance(precision: Double, actualClaimSize: Int) -> Double {
@@ -620,25 +673,26 @@ class GameScene: SKScene {
             let sectorIdx = Int(angle / sa) % sectorCount
 
             let maxCut = 2 + Int(stats.cutWidth * 2)
-            let actualClaimSize = computeActualClaimSize(landingSector: sectorIdx, player: player, maxCut: maxCut)
+            let actualClaimSize = computeChordClaimSize(
+                landingPoint: pos,
+                direction: direction,
+                landingSector: sectorIdx,
+                player: player,
+                maxCut: maxCut
+            )
             let hitChance = computeHitChance(precision: stats.precision, actualClaimSize: actualClaimSize)
             let didHit = Double.random(in: 0...1) < hitChance
 
 
             if didHit {
-                let didFlipLandingSector = style.id == "lob" && sectorOwnership[sectorIdx] != player
-                if didFlipLandingSector {
-                    sectorOwnership[sectorIdx] = player
-                    flipped += 1
-                }
-
-                let (cut, borderAngle) = performCut(
+                let (cut, chord) = performChordCut(
+                    landingPoint: pos,
+                    direction: direction,
                     landingSector: sectorIdx,
                     player: player,
-                    maxCut: maxCut,
-                    allowOwnedLanding: didFlipLandingSector
+                    maxCut: maxCut
                 )
-                flipped += cut
+                flipped = cut
                 let successfulHit = flipped > 0
                 showCoinFlip(at: pos, didHit: successfulHit)
 
@@ -646,8 +700,8 @@ class GameScene: SKScene {
                 if flipped > 0 {
                     refreshTerritoryVisuals()
 
-                    if let bAngle = borderAngle {
-                        drawCutLine(from: pos, borderAngle: bAngle)
+                    if let chord {
+                        drawChordCutLine(from: chord.0, to: chord.1)
                     }
                     emitCutParticles(at: pos, color: playerStrokeColors[player], count: 8 + flipped * 2)
                     spawnSliceLabel(at: pos, flipped: flipped, color: playerStrokeColors[player])
@@ -744,6 +798,24 @@ class GameScene: SKScene {
             SKAction.wait(forDuration: 5),
             SKAction.fadeOut(withDuration: 2),
             SKAction.removeFromParent()]))
+    }
+
+    private func drawChordCutLine(from start: CGPoint, to end: CGPoint) {
+        let cutPath = CGMutablePath()
+        cutPath.move(to: start)
+        cutPath.addLine(to: end)
+
+        let cutNode = SKShapeNode(path: cutPath)
+        cutNode.strokeColor = SKColor(red: 0.25, green: 0.15, blue: 0.05, alpha: 0.5)
+        cutNode.lineWidth = 1.5
+        cutNode.lineCap = .round
+        cutLineLayer.addChild(cutNode)
+
+        cutNode.run(SKAction.sequence([
+            SKAction.wait(forDuration: 5),
+            SKAction.fadeOut(withDuration: 2),
+            SKAction.removeFromParent()
+        ]))
     }
 
     private func spawnSliceLabel(at pos: CGPoint, flipped: Int, color: SKColor) {
