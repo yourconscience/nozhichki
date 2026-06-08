@@ -1,0 +1,10 @@
+.build/
+**/build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+.DS_Store
+_workspace/
+**/.omx/
+project.godot
+scripts/
