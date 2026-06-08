@@ -381,6 +381,12 @@ class GameScene: SKScene {
         return sectorOwnership[sector] == player
     }
 
+    private func isInsidePizza(_ point: CGPoint) -> Bool {
+        let dx = point.x - pizzaCenter.x
+        let dy = point.y - pizzaCenter.y
+        return dx * dx + dy * dy <= pizzaRadius * pizzaRadius
+    }
+
     private func pizzaExitPoint(from start: CGPoint, direction: CGVector) -> CGPoint {
         let sx = start.x - pizzaCenter.x
         let sy = start.y - pizzaCenter.y
@@ -478,15 +484,15 @@ class GameScene: SKScene {
         let step = playerMoveSpeed * CGFloat(dt)
         let proposed = CGPoint(x: current.x + move.dx * step, y: current.y + move.dy * step)
 
-        if isPoint(proposed, inTerritoryOf: 0) {
+        if isInsidePizza(proposed) {
             playerPositions[0] = proposed
         } else {
             let proposedX = CGPoint(x: current.x + move.dx * step, y: current.y)
             let proposedY = CGPoint(x: current.x, y: current.y + move.dy * step)
-            if isPoint(proposedX, inTerritoryOf: 0) {
+            if isInsidePizza(proposedX) {
                 playerPositions[0].x = proposedX.x
             }
-            if isPoint(proposedY, inTerritoryOf: 0) {
+            if isInsidePizza(proposedY) {
                 playerPositions[0].y = proposedY.y
             }
         }
