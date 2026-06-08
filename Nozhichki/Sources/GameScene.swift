@@ -448,8 +448,8 @@ class GameScene: SKScene {
     /// Core mechanic: knife lands at a sector, find the shorter arc to
     /// the player's territory, expand from the border up to maxCut sectors.
     /// Returns (flipped count, border sector angle for cut line visual).
-    private func performCut(landingSector: Int, player: Int, maxCut: Int) -> (Int, CGFloat?) {
-        if sectorOwnership[landingSector] == player { return (0, nil) }
+    private func performCut(landingSector: Int, player: Int, maxCut: Int, allowOwnedLanding: Bool = false) -> (Int, CGFloat?) {
+        if sectorOwnership[landingSector] == player && !allowOwnedLanding { return (0, nil) }
 
         let cwDist = distanceToOwned(from: landingSector, player: player, direction: 1)
         let ccwDist = distanceToOwned(from: landingSector, player: player, direction: -1)
@@ -511,7 +511,8 @@ class GameScene: SKScene {
         isThrowInProgress = true
         aimLine.alpha = 0; aimDot.alpha = 0; aimSectorHighlight.alpha = 0; aimHitChanceLabel.alpha = 0
 
-        let stats = EffectiveStats(knife: gs.selectedKnife, style: gs.selectedStyle ?? .standard)
+        let style = gs.selectedStyle ?? .standard
+        let stats = EffectiveStats(knife: gs.selectedKnife, style: style)
         let throwSpeed: CGFloat = 300 + CGFloat(stats.speed) * 80
 
         // Precision-based scatter
@@ -539,6 +540,7 @@ class GameScene: SKScene {
         knifeBody.zRotation = atan2(dir.dy, dir.dx) - .pi / 2
         knifeBody.isHidden = false
         knifeBody.alpha = 1
+        knifeBody.setScale(1.2)
 
         let target = hitsInside ? landingPt : CGPoint(
             x: pizzaCenter.x + dir.dx * pizzaRadius * 0.95,
@@ -547,22 +549,42 @@ class GameScene: SKScene {
         let dist = hypot(target.x - startPos.x, target.y - startPos.y)
         let dur = max(0.15, Double(dist / throwSpeed))
 
-        let move = SKAction.move(to: target, duration: dur)
-        move.timingMode = .easeOut
+        let throwAction: SKAction
+        let actionDuration: Double
+        if style.trajectoryType == .arc {
+            actionDuration = dur * 1.2
 
-        // Spin for spin style
-        let style = gs.selectedStyle ?? .standard
+            let arcPath = CGMutablePath()
+            arcPath.move(to: startPos)
+            let mid = CGPoint(x: (startPos.x + target.x) * 0.5, y: (startPos.y + target.y) * 0.5)
+            let control = CGPoint(x: mid.x + dir.dx * 120, y: mid.y + dir.dy * 120 + 50)
+            arcPath.addQuadCurve(to: target, control: control)
+
+            let follow = SKAction.follow(arcPath, asOffset: false, orientToPath: false, duration: actionDuration)
+            follow.timingMode = .easeIn
+            let scale = SKAction.sequence([
+                SKAction.scale(to: 1.75, duration: actionDuration * 0.45),
+                SKAction.scale(to: 1.2, duration: actionDuration * 0.55)
+            ])
+            throwAction = SKAction.group([follow, scale])
+        } else {
+            actionDuration = dur
+            let move = SKAction.move(to: target, duration: dur)
+            move.timingMode = .easeOut
+            throwAction = move
+        }
+
         var extra = SKAction.wait(forDuration: 0)
         if style.id == "spin" {
-            extra = SKAction.rotate(byAngle: .pi * 4, duration: dur)
+            extra = SKAction.rotate(byAngle: .pi * 4, duration: actionDuration)
         }
 
         let player = gs.currentPlayer
         turnIndicator.fillColor = playerStrokeColors[player]
         DispatchQueue.main.async { gs.statusMessage = "\(gs.playerNames[player]) throws!" }
 
-        knifeBody.run(SKAction.group([move, extra])) { [weak self] in
-            self?.onKnifeLanded(at: target, direction: dir, stats: stats,
+        knifeBody.run(SKAction.group([throwAction, extra])) { [weak self] in
+            self?.onKnifeLanded(at: target, direction: dir, stats: stats, style: style,
                                 player: player, hitInside: hitsInside)
         }
 
@@ -577,7 +599,7 @@ class GameScene: SKScene {
     }
 
     private func onKnifeLanded(at pos: CGPoint, direction: CGVector, stats: EffectiveStats,
-                                player: Int, hitInside: Bool) {
+                                style: ThrowingStyle, player: Int, hitInside: Bool) {
         guard let gs = gameState else { return }
 
         // Knife flash
@@ -604,8 +626,19 @@ class GameScene: SKScene {
 
 
             if didHit {
-                let (cut, borderAngle) = performCut(landingSector: sectorIdx, player: player, maxCut: maxCut)
-                flipped = cut
+                let didFlipLandingSector = style.id == "lob" && sectorOwnership[sectorIdx] != player
+                if didFlipLandingSector {
+                    sectorOwnership[sectorIdx] = player
+                    flipped += 1
+                }
+
+                let (cut, borderAngle) = performCut(
+                    landingSector: sectorIdx,
+                    player: player,
+                    maxCut: maxCut,
+                    allowOwnedLanding: didFlipLandingSector
+                )
+                flipped += cut
                 let successfulHit = flipped > 0
                 showCoinFlip(at: pos, didHit: successfulHit)
 

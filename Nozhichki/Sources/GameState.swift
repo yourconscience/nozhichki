@@ -15,7 +15,8 @@ class GameState: ObservableObject {
 
     let playerNames = ["You", "Blue", "Green", "Yellow"]
     let playerColors: [Color] = [.red, .blue, .green, .yellow]
-    let selectedKnife: Knife = .kitchen
+    @Published var selectedKnife: Knife = .kitchen
+    @Published var hasStartedGame: Bool = false
 
     lazy var scene: GameScene = {
         let scene = GameScene(size: CGSize(width: 900, height: 700))
@@ -45,6 +46,7 @@ class GameState: ObservableObject {
         styleCooldowns.removeAll()
         isGameOver = false
         winnerName = ""
+        hasStartedGame = false
         statusMessage = "Aim and click to throw"
         scene.resetGame()
     }

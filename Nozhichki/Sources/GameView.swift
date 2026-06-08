@@ -5,123 +5,236 @@ struct GameView: View {
     @StateObject private var gameState = GameState()
 
     var body: some View {
-        ZStack {
-            SpriteView(scene: gameState.scene)
-                .ignoresSafeArea()
+        if gameState.hasStartedGame {
+            ZStack {
+                SpriteView(scene: gameState.scene)
+                    .ignoresSafeArea()
 
-            VStack(spacing: 0) {
-                // Top HUD
-                HStack(spacing: 12) {
-                    ForEach(0..<4, id: \.self) { i in
-                        PlayerHUD(
-                            name: gameState.playerNames[i],
-                            percentage: gameState.territories[i],
-                            color: gameState.playerColors[i],
-                            isActive: gameState.currentPlayer == i,
-                            isEliminated: gameState.territories[i] <= 0
-                        )
-                    }
-                }
-                .padding(.top, 8)
-
-                Spacer()
-
-                // Bottom bar
-                VStack(spacing: 6) {
-                    // Status message
-                    Text(gameState.statusMessage)
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.8))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(.black.opacity(0.5)))
-                        .animation(.easeInOut(duration: 0.2), value: gameState.statusMessage)
-
-                    // Knife info
-                    HStack(spacing: 4) {
-                        Text(gameState.selectedKnife.name)
-                            .font(.caption.bold())
-                    }
-                    .foregroundStyle(.white.opacity(0.4))
-                    .padding(.bottom, 2)
-
-                    // Style selector
-                    HStack(spacing: 10) {
-                        ForEach(gameState.availableStyles.filter { $0.id == "standard" || $0.id == "spin" }) { style in
-                            StyleButton(
-                                style: style,
-                                isSelected: gameState.selectedStyle?.id == style.id,
-                                cooldownLeft: gameState.styleCooldowns[style.id, default: 0]
-                            ) {
-                                gameState.selectStyle(style)
-                            }
+                VStack(spacing: 0) {
+                    // Top HUD
+                    HStack(spacing: 12) {
+                        ForEach(0..<4, id: \.self) { i in
+                            PlayerHUD(
+                                name: gameState.playerNames[i],
+                                percentage: gameState.territories[i],
+                                color: gameState.playerColors[i],
+                                isActive: gameState.currentPlayer == i,
+                                isEliminated: gameState.territories[i] <= 0
+                            )
                         }
                     }
+                    .padding(.top, 8)
 
-                    // Selected style stats
-                    if let style = gameState.selectedStyle {
-                        StyleStatsBar(style: style, knife: gameState.selectedKnife)
-                            .padding(.top, 4)
-                    }
-                }
-                .padding(.bottom, 8)
-                .padding(.horizontal, 16)
-            }
-
-            // Turn overlay for AI
-            if gameState.currentPlayer != 0 {
-                VStack {
                     Spacer()
-                    HStack {
-                        Spacer()
-                        Text("\(gameState.playerNames[gameState.currentPlayer])'s turn")
-                            .font(.caption)
-                            .foregroundStyle(gameState.playerColors[gameState.currentPlayer])
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(
-                                Capsule().fill(.black.opacity(0.5))
-                            )
-                        Spacer()
+
+                    // Bottom bar
+                    VStack(spacing: 6) {
+                        // Status message
+                        Text(gameState.statusMessage)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(.white.opacity(0.8))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(.black.opacity(0.5)))
+                            .animation(.easeInOut(duration: 0.2), value: gameState.statusMessage)
+
+                        // Knife info
+                        HStack(spacing: 4) {
+                            Text(gameState.selectedKnife.name)
+                                .font(.caption.bold())
+                        }
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.bottom, 2)
+
+                        // Style selector
+                        HStack(spacing: 10) {
+                            ForEach(gameState.availableStyles) { style in
+                                StyleButton(
+                                    style: style,
+                                    isSelected: gameState.selectedStyle?.id == style.id,
+                                    cooldownLeft: gameState.styleCooldowns[style.id, default: 0]
+                                ) {
+                                    gameState.selectStyle(style)
+                                }
+                            }
+                        }
+
+                        // Selected style stats
+                        if let style = gameState.selectedStyle {
+                            StyleStatsBar(style: style, knife: gameState.selectedKnife)
+                                .padding(.top, 4)
+                        }
                     }
-                    .padding(.bottom, 100)
+                    .padding(.bottom, 8)
+                    .padding(.horizontal, 16)
                 }
-                .allowsHitTesting(false)
-            }
 
-            if gameState.currentPlayer == 0 && !gameState.isGameOver {
-                VStack {
-                    Spacer()
-                    Text("YOUR TURN")
-                        .font(.system(size: 18, weight: .heavy, design: .rounded))
-                        .tracking(2)
-                        .foregroundStyle(.red)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(.black.opacity(0.55)))
-                        .overlay(Capsule().strokeBorder(.red.opacity(0.7), lineWidth: 1.5))
-                        .shadow(color: .red.opacity(0.35), radius: 8)
-                    Spacer().frame(height: 108)
+                // Turn overlay for AI
+                if gameState.currentPlayer != 0 {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            Text("\(gameState.playerNames[gameState.currentPlayer])'s turn")
+                                .font(.caption)
+                                .foregroundStyle(gameState.playerColors[gameState.currentPlayer])
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(
+                                    Capsule().fill(.black.opacity(0.5))
+                                )
+                            Spacer()
+                        }
+                        .padding(.bottom, 100)
+                    }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
-                .transition(.opacity)
-            }
 
-            if gameState.isGameOver {
-                GameOverOverlay(
-                    winnerName: gameState.winnerName,
-                    winnerColor: gameState.playerColors[
-                        gameState.playerNames.firstIndex(of: gameState.winnerName) ?? 0
-                    ],
-                    playerNames: gameState.playerNames,
-                    playerColors: gameState.playerColors,
-                    territories: gameState.territories,
-                    onPlayAgain: gameState.reset
-                )
-                .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                if gameState.currentPlayer == 0 && !gameState.isGameOver {
+                    VStack {
+                        Spacer()
+                        Text("YOUR TURN")
+                            .font(.system(size: 18, weight: .heavy, design: .rounded))
+                            .tracking(2)
+                            .foregroundStyle(.red)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(.black.opacity(0.55)))
+                            .overlay(Capsule().strokeBorder(.red.opacity(0.7), lineWidth: 1.5))
+                            .shadow(color: .red.opacity(0.35), radius: 8)
+                        Spacer().frame(height: 108)
+                    }
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+                }
+
+                if gameState.isGameOver {
+                    GameOverOverlay(
+                        winnerName: gameState.winnerName,
+                        winnerColor: gameState.playerColors[
+                            gameState.playerNames.firstIndex(of: gameState.winnerName) ?? 0
+                        ],
+                        playerNames: gameState.playerNames,
+                        playerColors: gameState.playerColors,
+                        territories: gameState.territories,
+                        onPlayAgain: gameState.reset
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
+            .animation(.easeInOut(duration: 0.25), value: gameState.isGameOver)
+        } else {
+            KnifePickerView(gameState: gameState)
         }
-        .animation(.easeInOut(duration: 0.25), value: gameState.isGameOver)
+    }
+}
+
+// MARK: - Knife Picker
+
+struct KnifePickerView: View {
+    @ObservedObject var gameState: GameState
+
+    private let knives: [Knife] = [.kitchen, Knife.all[1], Knife.all[2]]
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.12, green: 0.1, blue: 0.08)
+                .ignoresSafeArea()
+
+            VStack(spacing: 22) {
+                Text("Choose your weapon")
+                    .font(.system(size: 38, weight: .black, design: .rounded))
+                    .foregroundStyle(.white)
+
+                VStack(spacing: 14) {
+                    ForEach(knives) { knife in
+                        KnifeCardView(
+                            knife: knife,
+                            isSelected: gameState.selectedKnife.id == knife.id
+                        ) {
+                            gameState.selectedKnife = knife
+                            gameState.hasStartedGame = true
+                        }
+                    }
+                }
+                .frame(maxWidth: 640)
+            }
+            .padding(32)
+        }
+    }
+}
+
+struct KnifeCardView: View {
+    let knife: Knife
+    let isSelected: Bool
+    let action: () -> Void
+
+    private var icon: String {
+        switch knife.id {
+        case "cleaver":
+            return "🪓"
+        case "stiletto":
+            return "🗡️"
+        default:
+            return "🔪"
+        }
+    }
+
+    private var tagline: String {
+        switch knife.id {
+        case "cleaver":
+            return "Heavy hitter"
+        case "stiletto":
+            return "Precision strikes"
+        default:
+            return "Balanced"
+        }
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 18) {
+                Text(icon)
+                    .font(.system(size: 46))
+
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text(knife.name)
+                            .font(.system(size: 22, weight: .heavy, design: .rounded))
+                            .foregroundStyle(.white)
+
+                        Text(tagline)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.white.opacity(0.58))
+                    }
+
+                    HStack(spacing: 14) {
+                        StatPip(label: "SPD", value: Double(knife.speed), max: 5, color: .cyan)
+                        StatPip(label: "PWR", value: Double(knife.power), max: 5, color: .red)
+                        StatPip(label: "WID", value: Double(knife.cutWidth), max: 5, color: .orange)
+                        StatPip(label: "PRE", value: Double(knife.precision), max: 5, color: .purple)
+                    }
+                }
+
+                Spacer()
+            }
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 20)
+                    .fill(.black.opacity(0.72))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20)
+                            .strokeBorder(
+                                isSelected ? .orange : .white.opacity(0.14),
+                                lineWidth: isSelected ? 2.5 : 1.5
+                            )
+                    )
+            )
+            .shadow(color: isSelected ? .orange.opacity(0.22) : .black.opacity(0.38), radius: 16)
+        }
+        .buttonStyle(.plain)
     }
 }
 
