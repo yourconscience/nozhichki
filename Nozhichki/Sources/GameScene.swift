@@ -23,9 +23,6 @@ class GameScene: SKScene {
     private var aimHitChanceLabel: SKLabelNode!
     private var aimDirection: CGVector = CGVector(dx: 0, dy: 1)
     private var isThrowInProgress = false
-    private var chargeStartTime: TimeInterval = 0
-    private var isCharging = false
-    private var chargeIndicator: SKShapeNode!
 
     // Knife
     private var knifeBody: SKShapeNode!
@@ -37,6 +34,15 @@ class GameScene: SKScene {
 
     // Status
     private var turnIndicator: SKShapeNode!
+
+    // Player movement
+    private var playerDots: [SKShapeNode] = []
+    private var playerPositions: [CGPoint] = Array(repeating: .zero, count: 4)
+    private var pressedKeys: Set<UInt16> = []
+    private var lastUpdateTime: TimeInterval = 0
+    private var lastTrailTime: TimeInterval = 0
+    private var lastMousePosition: CGPoint?
+    private let playerMoveSpeed: CGFloat = 150
 
     private let playerSKColors: [SKColor] = [
         SKColor(red: 0.95, green: 0.25, blue: 0.25, alpha: 0.45),
@@ -72,6 +78,7 @@ class GameScene: SKScene {
             options: [.mouseMoved, .activeInKeyWindow, .inVisibleRect],
             owner: view, userInfo: nil)
         view.addTrackingArea(ta)
+        view.window?.makeFirstResponder(view)
 
         setupLayers()
         setupPizza()
@@ -88,6 +95,7 @@ class GameScene: SKScene {
         turnIndicator.lineWidth = 2
         turnIndicator.zPosition = 55
         addChild(turnIndicator)
+        setupPlayerDots()
     }
 
     // MARK: - Setup
@@ -266,13 +274,6 @@ class GameScene: SKScene {
         aimHitChanceLabel.zPosition = 2
         aimLayer.addChild(aimHitChanceLabel)
 
-
-        chargeIndicator = SKShapeNode(circleOfRadius: 14)
-        chargeIndicator.fillColor = .clear
-        chargeIndicator.strokeColor = .orange
-        chargeIndicator.lineWidth = 3
-        chargeIndicator.alpha = 0
-        aimLayer.addChild(chargeIndicator)
     }
 
     private func setupKnife() {
@@ -294,55 +295,212 @@ class GameScene: SKScene {
         knifeLayer.addChild(knifeBody)
     }
 
+    private func setupPlayerDots() {
+        playerDots.forEach { $0.removeFromParent() }
+        playerDots.removeAll()
+
+        resetPlayerPositions()
+
+        for player in 0..<4 {
+            let dot = SKShapeNode(circleOfRadius: player == 0 ? 7 : 6)
+            dot.fillColor = playerStrokeColors[player]
+            dot.strokeColor = .white.withAlphaComponent(player == 0 ? 0.9 : 0.45)
+            dot.lineWidth = player == 0 ? 2 : 1
+            dot.zPosition = 55
+            dot.position = playerPositions[player]
+            addChild(dot)
+            playerDots.append(dot)
+        }
+    }
+
+    private func resetPlayerPositions() {
+        for player in 0..<4 {
+            playerPositions[player] = territorySpawnPoint(for: player)
+        }
+        for player in 0..<min(playerDots.count, playerPositions.count) {
+            playerDots[player].position = playerPositions[player]
+        }
+    }
+
+    private func territorySpawnPoint(for player: Int) -> CGPoint {
+        let sa = (2 * .pi) / CGFloat(sectorCount)
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var count: CGFloat = 0
+
+        for i in 0..<sectorCount where sectorOwnership[i] == player {
+            let angle = sa * (CGFloat(i) + 0.5)
+            x += cos(angle)
+            y += sin(angle)
+            count += 1
+        }
+
+        if count == 0 {
+            return pizzaCenter
+        }
+
+        let targetAngle: CGFloat
+        if hypot(x, y) < 0.001 {
+            guard let first = sectorOwnership.firstIndex(of: player) else { return pizzaCenter }
+            targetAngle = sa * (CGFloat(first) + 0.5)
+        } else {
+            targetAngle = atan2(y, x)
+        }
+
+        var bestSector = sectorOwnership.firstIndex(of: player) ?? 0
+        var bestDelta = CGFloat.greatestFiniteMagnitude
+        for i in 0..<sectorCount where sectorOwnership[i] == player {
+            let angle = sa * (CGFloat(i) + 0.5)
+            let delta = abs(shortestAngleDelta(from: targetAngle, to: angle))
+            if delta < bestDelta {
+                bestDelta = delta
+                bestSector = i
+            }
+        }
+
+        let angle = sa * (CGFloat(bestSector) + 0.5)
+        return CGPoint(
+            x: pizzaCenter.x + cos(angle) * pizzaRadius * 0.45,
+            y: pizzaCenter.y + sin(angle) * pizzaRadius * 0.45
+        )
+    }
+
+    private func sectorIndex(at point: CGPoint) -> Int? {
+        let dx = point.x - pizzaCenter.x
+        let dy = point.y - pizzaCenter.y
+        guard hypot(dx, dy) <= pizzaRadius - 6 else { return nil }
+
+        var angle = atan2(dy, dx)
+        if angle < 0 { angle += 2 * .pi }
+        let sa = (2 * .pi) / CGFloat(sectorCount)
+        return Int(angle / sa) % sectorCount
+    }
+
+    private func isPoint(_ point: CGPoint, inTerritoryOf player: Int) -> Bool {
+        guard let sector = sectorIndex(at: point) else { return false }
+        return sectorOwnership[sector] == player
+    }
+
+    private func pizzaExitPoint(from start: CGPoint, direction: CGVector) -> CGPoint {
+        let sx = start.x - pizzaCenter.x
+        let sy = start.y - pizzaCenter.y
+        let b = sx * direction.dx + sy * direction.dy
+        let c = sx * sx + sy * sy - pizzaRadius * pizzaRadius
+        let discriminant = max(0, b * b - c)
+        let t = -b + sqrt(discriminant)
+        return CGPoint(x: start.x + direction.dx * t, y: start.y + direction.dy * t)
+    }
+
+    private func addTrailDot(at point: CGPoint, color: SKColor) {
+        let trail = SKShapeNode(circleOfRadius: 3)
+        trail.position = point
+        trail.fillColor = color.withAlphaComponent(0.35)
+        trail.strokeColor = .clear
+        trail.zPosition = 54
+        addChild(trail)
+        trail.run(SKAction.sequence([
+            SKAction.group([
+                SKAction.fadeOut(withDuration: 0.45),
+                SKAction.scale(to: 0.25, duration: 0.45)
+            ]),
+            SKAction.removeFromParent()
+        ]))
+    }
+
     // MARK: - Input
 
     override func mouseMoved(with event: NSEvent) {
         guard !isThrowInProgress, gameState?.currentPlayer == 0 else { return }
+        lastMousePosition = event.location(in: self)
         updateAimDirection(to: event.location(in: self))
         updateAimVisuals()
     }
 
     override func mouseDown(with event: NSEvent) {
         guard !isThrowInProgress, gameState?.currentPlayer == 0 else { return }
+        lastMousePosition = event.location(in: self)
         updateAimDirection(to: event.location(in: self))
-        isCharging = true
-        chargeStartTime = event.timestamp
-        chargeIndicator.alpha = 0.6
-        aimSectorHighlight.alpha = 0
-        chargeIndicator.setScale(0.5)
-        chargeIndicator.position = CGPoint(
-            x: pizzaCenter.x + aimDirection.dx * pizzaRadius,
-            y: pizzaCenter.y + aimDirection.dy * pizzaRadius)
-        chargeIndicator.run(
-            SKAction.repeatForever(SKAction.sequence([
-                SKAction.scale(to: 1.5, duration: 1.0),
-                SKAction.scale(to: 0.5, duration: 0.0)])),
-            withKey: "charge")
-    }
-
-    override func mouseUp(with event: NSEvent) {
-        guard isCharging, !isThrowInProgress, gameState?.currentPlayer == 0 else { return }
-        isCharging = false
-        chargeIndicator.removeAction(forKey: "charge")
-        chargeIndicator.alpha = 0
-        let power = 0.6 + min(event.timestamp - chargeStartTime, 1.5) * 0.4
-        throwKnife(direction: aimDirection, power: power)
+        throwKnife(direction: aimDirection, power: 0.8)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard isCharging, !isThrowInProgress, gameState?.currentPlayer == 0 else { return }
+        guard !isThrowInProgress, gameState?.currentPlayer == 0 else { return }
+        lastMousePosition = event.location(in: self)
         updateAimDirection(to: event.location(in: self))
         updateAimVisuals()
-        chargeIndicator.position = CGPoint(
-            x: pizzaCenter.x + aimDirection.dx * pizzaRadius,
-            y: pizzaCenter.y + aimDirection.dy * pizzaRadius)
+    }
+
+    override func keyDown(with event: NSEvent) {
+        pressedKeys.insert(event.keyCode)
+    }
+
+    override func keyUp(with event: NSEvent) {
+        pressedKeys.remove(event.keyCode)
     }
 
     private func updateAimDirection(to point: CGPoint) {
-        let dx = point.x - pizzaCenter.x, dy = point.y - pizzaCenter.y
+        let origin = playerPositions[0]
+        let dx = point.x - origin.x, dy = point.y - origin.y
         let len = hypot(dx, dy)
         guard len > 5 else { return }
         aimDirection = CGVector(dx: dx / len, dy: dy / len)
+    }
+
+    override func update(_ currentTime: TimeInterval) {
+        if lastUpdateTime == 0 {
+            lastUpdateTime = currentTime
+            return
+        }
+
+        let dt = min(1.0 / 30.0, currentTime - lastUpdateTime)
+        lastUpdateTime = currentTime
+
+        guard gameState?.currentPlayer == 0,
+              gameState?.isGameOver != true,
+              gameState?.hasStartedGame == true,
+              !isThrowInProgress else {
+            return
+        }
+
+        var move = CGVector(dx: 0, dy: 0)
+        if pressedKeys.contains(13) { move.dy += 1 } // W
+        if pressedKeys.contains(1) { move.dy -= 1 }  // S
+        if pressedKeys.contains(0) { move.dx -= 1 }  // A
+        if pressedKeys.contains(2) { move.dx += 1 }  // D
+
+        let len = hypot(move.dx, move.dy)
+        guard len > 0 else { return }
+
+        move.dx /= len
+        move.dy /= len
+
+        let current = playerPositions[0]
+        let step = playerMoveSpeed * CGFloat(dt)
+        let proposed = CGPoint(x: current.x + move.dx * step, y: current.y + move.dy * step)
+
+        if isPoint(proposed, inTerritoryOf: 0) {
+            playerPositions[0] = proposed
+        } else {
+            let proposedX = CGPoint(x: current.x + move.dx * step, y: current.y)
+            let proposedY = CGPoint(x: current.x, y: current.y + move.dy * step)
+            if isPoint(proposedX, inTerritoryOf: 0) {
+                playerPositions[0].x = proposedX.x
+            }
+            if isPoint(proposedY, inTerritoryOf: 0) {
+                playerPositions[0].y = proposedY.y
+            }
+        }
+
+        playerDots[0].position = playerPositions[0]
+        if currentTime - lastTrailTime > 0.05 {
+            lastTrailTime = currentTime
+            addTrailDot(at: playerPositions[0], color: playerStrokeColors[0])
+        }
+
+        if let lastMousePosition {
+            updateAimDirection(to: lastMousePosition)
+            updateAimVisuals()
+        }
     }
 
     private func updateAimVisuals() {
@@ -358,12 +516,13 @@ class GameScene: SKScene {
         aimDot.alpha = 0.8
 
         // Dashed aim line
+        let origin = playerPositions[0]
         let start = CGPoint(
-            x: pizzaCenter.x + aimDirection.dx * 30,
-            y: pizzaCenter.y + aimDirection.dy * 30)
+            x: origin.x + aimDirection.dx * 14,
+            y: origin.y + aimDirection.dy * 14)
         let end = CGPoint(
-            x: pizzaCenter.x + aimDirection.dx * (pizzaRadius + 20),
-            y: pizzaCenter.y + aimDirection.dy * (pizzaRadius + 20))
+            x: origin.x + aimDirection.dx * (pizzaRadius + 20),
+            y: origin.y + aimDirection.dy * (pizzaRadius + 20))
         let path = CGMutablePath()
         let total = hypot(end.x - start.x, end.y - start.y)
         var t: CGFloat = 0
@@ -386,23 +545,22 @@ class GameScene: SKScene {
         aimDot.strokeColor = SKColor(white: 1, alpha: 0.6)
         aimDot.lineWidth = 3
 
-        guard !isCharging, let gs = gameState else {
+        guard let gs = gameState else {
             aimSectorHighlight.alpha = 0
             aimHitChanceLabel.alpha = 0
             return
         }
 
         let stats = EffectiveStats(knife: gs.selectedKnife, style: gs.selectedStyle ?? .standard)
-        let landingDistance = pizzaRadius - (pizzaRadius * CGFloat(0.3 + stats.range * 0.12) * 0.8)
+        let landingDistance = pizzaRadius * CGFloat(0.3 + stats.range * 0.12) * 0.8
         let landingPoint = CGPoint(
-            x: pizzaCenter.x + aimDirection.dx * max(landingDistance, 10),
-            y: pizzaCenter.y + aimDirection.dy * max(landingDistance, 10))
-        let dx = landingPoint.x - pizzaCenter.x
-        let dy = landingPoint.y - pizzaCenter.y
-        var sectorAngle = atan2(dy, dx)
-        if sectorAngle < 0 { sectorAngle += 2 * .pi }
-        let sa = (2 * .pi) / CGFloat(sectorCount)
-        let sector = Int(floor(sectorAngle / sa)) % sectorCount
+            x: origin.x + aimDirection.dx * landingDistance,
+            y: origin.y + aimDirection.dy * landingDistance)
+        guard let sector = sectorIndex(at: landingPoint) else {
+            aimSectorHighlight.alpha = 0
+            aimHitChanceLabel.alpha = 0
+            return
+        }
 
         let maxCut = 2 + Int(stats.cutWidth * 2)
 
@@ -567,23 +725,19 @@ class GameScene: SKScene {
         let style = gs.selectedStyle ?? .standard
         let stats = EffectiveStats(knife: gs.selectedKnife, style: style)
         let throwSpeed: CGFloat = 300 + CGFloat(stats.speed) * 80
+        let player = gs.currentPlayer
 
         // Precision-based scatter
         let scatter = (1.0 - stats.precision / 5.0) * 0.15
         let angle = atan2(direction.dy, direction.dx) + CGFloat.random(in: -scatter...scatter)
         let dir = CGVector(dx: cos(angle), dy: sin(angle))
 
-        // Landing point: from edge toward center, depth based on range + power
-        let maxDepth = pizzaRadius * CGFloat(0.3 + stats.range * 0.12) * CGFloat(power)
-        let landDist = pizzaRadius - maxDepth
+        // Landing point: from the current player's position outward.
+        let throwDistance = pizzaRadius * CGFloat(0.3 + stats.range * 0.12) * CGFloat(power)
+        let startPos = playerPositions[player]
         let landingPt = CGPoint(
-            x: pizzaCenter.x + dir.dx * max(landDist, 10),
-            y: pizzaCenter.y + dir.dy * max(landDist, 10))
-
-        // Start from outside
-        let startPos = CGPoint(
-            x: pizzaCenter.x + dir.dx * (pizzaRadius + 30),
-            y: pizzaCenter.y + dir.dy * (pizzaRadius + 30))
+            x: startPos.x + dir.dx * throwDistance,
+            y: startPos.y + dir.dy * throwDistance)
 
         // Check if landing is inside pizza
         let landDistFromCenter = hypot(landingPt.x - pizzaCenter.x, landingPt.y - pizzaCenter.y)
@@ -595,9 +749,7 @@ class GameScene: SKScene {
         knifeBody.alpha = 1
         knifeBody.setScale(1.2)
 
-        let target = hitsInside ? landingPt : CGPoint(
-            x: pizzaCenter.x + dir.dx * pizzaRadius * 0.95,
-            y: pizzaCenter.y + dir.dy * pizzaRadius * 0.95)
+        let target = hitsInside ? landingPt : pizzaExitPoint(from: startPos, direction: dir)
 
         let dist = hypot(target.x - startPos.x, target.y - startPos.y)
         let dur = max(0.15, Double(dist / throwSpeed))
@@ -632,7 +784,6 @@ class GameScene: SKScene {
             extra = SKAction.rotate(byAngle: .pi * 4, duration: actionDuration)
         }
 
-        let player = gs.currentPlayer
         turnIndicator.fillColor = playerStrokeColors[player]
         DispatchQueue.main.async { gs.statusMessage = "\(gs.playerNames[player]) throws!" }
 
@@ -663,7 +814,6 @@ class GameScene: SKScene {
             SKAction.fadeAlpha(to: 1.0, duration: 0.05)]))
 
         var flipped = 0
-        var didEarnAnotherThrow = false
 
         if hitInside {
             let dx = pos.x - pizzaCenter.x, dy = pos.y - pizzaCenter.y
@@ -707,9 +857,8 @@ class GameScene: SKScene {
                     spawnSliceLabel(at: pos, flipped: flipped, color: playerStrokeColors[player])
                     let pct = max(1, Int(round(Double(flipped) * 100 / Double(sectorCount))))
                     DispatchQueue.main.async {
-                        gs.statusMessage = "\(gs.playerNames[player]) claimed \(pct)%! Throw again!"
+                        gs.statusMessage = "\(gs.playerNames[player]) claimed \(pct)%!"
                     }
-                    didEarnAnotherThrow = true
                 } else {
                     emitMissParticles(at: pos)
                     spawnMissLabel(at: pos, delay: 0.65)
@@ -762,18 +911,10 @@ class GameScene: SKScene {
             return
         }
 
-        if didEarnAnotherThrow {
-            isThrowInProgress = false
-            updateAimVisuals()
-            if gs.currentPlayer != 0 {
-                scheduleAITurn()
-            }
-        } else {
-            run(SKAction.wait(forDuration: 0.5)) { [weak self] in
-                self?.isThrowInProgress = false
-                self?.updateAimVisuals()
-                DispatchQueue.main.async { gs.nextTurn() }
-            }
+        run(SKAction.wait(forDuration: 0.5)) { [weak self] in
+            self?.isThrowInProgress = false
+            self?.updateAimVisuals()
+            DispatchQueue.main.async { gs.nextTurn() }
         }
     }
 
@@ -975,18 +1116,49 @@ class GameScene: SKScene {
             }
         }
 
-        bestAngle += CGFloat.random(in: -0.1...0.1)
-        let dir = CGVector(dx: cos(bestAngle), dy: sin(bestAngle))
-        throwKnife(direction: dir, power: Double.random(in: 0.7...1.1))
+        var moveAngle = bestAngle + .pi
+        var bestMoveDelta = CGFloat.greatestFiniteMagnitude
+        for i in 0..<sectorCount where sectorOwnership[i] == me {
+            let prev = (i - 1 + sectorCount) % sectorCount
+            let next = (i + 1) % sectorCount
+            guard sectorOwnership[prev] != me || sectorOwnership[next] != me else { continue }
+
+            let angle = sa * (CGFloat(i) + 0.5)
+            let delta = abs(shortestAngleDelta(from: bestAngle, to: angle))
+            if delta < bestMoveDelta {
+                bestMoveDelta = delta
+                moveAngle = angle
+            }
+        }
+
+        let targetPos = CGPoint(
+            x: pizzaCenter.x + cos(moveAngle) * pizzaRadius * 0.72,
+            y: pizzaCenter.y + sin(moveAngle) * pizzaRadius * 0.72
+        )
+        let safeTarget = isPoint(targetPos, inTerritoryOf: me) ? targetPos : territorySpawnPoint(for: me)
+        let move = SKAction.move(to: safeTarget, duration: 0.45)
+        move.timingMode = .easeInEaseOut
+        playerDots[me].run(move) { [weak self] in
+            guard let self else { return }
+            self.playerPositions[me] = safeTarget
+            self.addTrailDot(at: safeTarget, color: self.playerStrokeColors[me])
+
+            let throwAngle = bestAngle + CGFloat.random(in: -0.1...0.1)
+            let dir = CGVector(dx: cos(throwAngle), dy: sin(throwAngle))
+            self.throwKnife(direction: dir, power: Double.random(in: 0.7...1.1))
+        }
     }
 
     func resetGame() {
         sectorOwnership = (0..<sectorCount).map { $0 % 4 }.shuffled()
         buildSectorNodes()
         syncPercentages()
+        resetPlayerPositions()
+        pressedKeys.removeAll()
+        lastUpdateTime = 0
+        lastTrailTime = 0
 
         isThrowInProgress = false
-        isCharging = false
         cutLineLayer.removeAllChildren()
         effectLayer.removeAllChildren()
         aimSectorHighlight.alpha = 0
@@ -997,9 +1169,6 @@ class GameScene: SKScene {
         knifeBody.isHidden = true
         knifeBody.alpha = 1
         knifeBody.setScale(1.2)
-
-        chargeIndicator.removeAllActions()
-        chargeIndicator.alpha = 0
 
         updateAimVisuals()
     }
